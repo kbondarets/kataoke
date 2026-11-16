@@ -4,7 +4,7 @@ import { DEFAULT_LEAD_MS, findActive, positionAt, shouldResync } from '../core/s
 import type { ActiveState, PositionSample } from '../core/sync/sync-engine';
 import { buildTrackKey } from '../core/track-match';
 import type { LyricsTimeline, TrackInfo } from '../core/types';
-import { LrclibProvider } from '../providers/lrclib/lrclib-provider';
+import { BackgroundLyricsProvider } from '../providers/background-bridge';
 import { mountOverlay } from '../ui/overlay/mount';
 import type { OverlayStatus } from '../ui/overlay/Overlay';
 
@@ -37,7 +37,7 @@ function start(): void {
   // В MVP кеш живёт в памяти вкладки: `chrome.storage` подключим отдельной
   // задачей, чтобы не смешивать сборку расширения с логикой синхронизации.
   const cache = new TtlCache(new MemoryCacheStore(), 1);
-  const provider = new LrclibProvider();
+  const provider = new BackgroundLyricsProvider();
 
   const overlay = mountOverlay();
 

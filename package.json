@@ -5,12 +5,14 @@
   "description": "Караоке-тексты поверх любого музыкального сервиса в браузере",
   "type": "module",
   "scripts": {
-    "dev": "vite build --watch --mode development",
-    "build": "tsc --noEmit && vite build",
+    "dev": "vite build --mode content --watch",
+    "build": "npm run build:content && npm run build:background",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm run typecheck && npm run test && vite build"
+    "check": "npm run typecheck && npm run test && npm run build",
+    "build:content": "vite build --mode content",
+    "build:background": "vite build --mode background"
   },
   "dependencies": {
     "preact": "^10.24.0"
