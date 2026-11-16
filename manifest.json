@@ -3,10 +3,8 @@
   "name": "kataoke",
   "version": "0.0.1",
   "description": "Караоке-тексты поверх любого музыкального сервиса",
-  "default_locale": "ru",
   "action": {
-    "default_title": "kataoke",
-    "default_popup": "popup.html"
+    "default_title": "kataoke"
   },
   "content_scripts": [
     {
