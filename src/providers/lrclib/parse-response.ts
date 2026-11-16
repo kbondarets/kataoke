@@ -90,16 +90,6 @@ export function buildGetParams(track: TrackInfo): URLSearchParams {
   return params;
 }
 
-/** Параметры поиска — запасной путь, когда точный запрос не сработал. */
-export function buildSearchParams(track: TrackInfo): URLSearchParams {
-  const params = new URLSearchParams({
-    artist_name: track.artist,
-    track_name: track.title,
-  });
-  if (track.album) params.set('album_name', track.album);
-  return params;
-}
-
 /** Таймлайн для случаев, когда синхронизации нет. */
 export function plainTimeline(text: string): LyricsTimeline {
   return {

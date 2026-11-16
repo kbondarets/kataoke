@@ -62,13 +62,13 @@ npm run check     # типы + тесты + сборка
 ## Структура
 
 ```
-src/core/        sync engine, парсер LRC, матчинг треков — без DOM и без сети
+src/core/        sync engine, парсер LRC, матчинг и транслит — без DOM и без сети
 src/adapters/    Яндекс Музыка, YouTube — здесь и только здесь живут селекторы
 src/providers/   LRCLIB — сеть, таймауты, валидация ответа
 src/ui/          оверлей в Shadow DOM (Preact)
 src/background/  service worker
 src/content/     сборка всего вместе
-tests/           85 тестов на ядро, адаптеры и провайдеры
+tests/           104 теста на ядро, адаптеры и провайдеры
 ```
 
 ## Ключевые решения (кратко)
