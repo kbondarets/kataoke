@@ -175,7 +175,7 @@ export class YandexMusicAdapter implements PlayerAdapter {
     const bind = (name: string, event: PlayerEvent): void => {
       const handler = (): void => this.#emit(event);
       media.addEventListener(name, handler);
-      this.#detach.push(() => media.removeEventListener(name, handler));
+      this.#mediaDetach.push(() => media.removeEventListener(name, handler));
     };
 
     bind('play', 'play');
