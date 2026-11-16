@@ -24,35 +24,48 @@ function copyManifest(): Plugin {
 }
 
 /**
- * Проверка, что content script остался классическим скриптом.
+ * Проверка, что файлы расширения остались классическими скриптами.
  *
- * MV3 грузит `content_scripts.js` как обычный скрипт: наличие `import` в нём —
- * это расширение, которое не запустится, причём без внятной ошибки. Лучше
- * уронить сборку, чем отдать такой файл.
+ * MV3 грузит content script как обычный скрипт: наличие `import` — это
+ * расширение, которое не запустится, причём без внятной ошибки. Лучше уронить
+ * сборку, чем отдать такой файл.
  */
-function assertClassicScript(): Plugin {
+function assertClassicScripts(): Plugin {
   return {
-    name: 'kataoke-assert-classic-script',
+    name: 'kataoke-assert-classic-scripts',
     closeBundle() {
-      const code = readFileSync(resolve(outDir, 'content.js'), 'utf8');
-      if (/^\s*(import|export)\s/m.test(code)) {
-        throw new Error(
-          'content.js содержит import/export: content script в MV3 должен быть классическим скриптом',
-        );
+      for (const file of ['content.js', 'page-agent.js']) {
+        const code = readFileSync(resolve(outDir, file), 'utf8');
+        if (/^\s*(import|export)\s/m.test(code)) {
+          throw new Error(
+            `${file} содержит import/export: скрипты расширения в MV3 должны быть классическими`,
+          );
+        }
       }
     },
   };
 }
 
+/** Точки входа сборки: имя файла в `dist` и исходник. */
+const ENTRY_POINTS: Record<string, { name: string; source: string }> = {
+  content: { name: 'content', source: 'src/content/index.ts' },
+  background: { name: 'background', source: 'src/background/index.ts' },
+  'page-agent': { name: 'page-agent', source: 'src/adapters/yandex-music/page-agent.ts' },
+};
+
 /**
- * Два независимых прогона сборки: `--mode content` и `--mode background`.
+ * Два независимых прогона сборки: `--mode content` и `--mode background`
+ * (плюс `--mode page-agent`).
  *
- * Собирать оба входа за один прогон нельзя: Rollup выносит общий код в
+ * Собирать несколько входов за один прогон нельзя: Rollup выносит общий код в
  * `chunks/`, а content script в MV3 — **классический скрипт**, он не умеет
  * `import` и молча не запускается. Отдельный прогон инлайнит весь код в файл.
  */
 export default function config({ mode }: { mode: string }): UserConfig {
-  const isBackground = mode === 'background';
+  const entry = ENTRY_POINTS[mode];
+  if (!entry) throw new Error(`неизвестный режим сборки: ${mode}`);
+
+  const isLastPass = mode === 'background';
 
   return {
     resolve: {
@@ -60,17 +73,12 @@ export default function config({ mode }: { mode: string }): UserConfig {
     },
     build: {
       outDir,
-      // `dist` очищает только первый прогон, иначе второй снесёт результат первого.
-      emptyOutDir: !isBackground,
+      // `dist` очищает только первый прогон, иначе следующий снесёт предыдущий.
+      emptyOutDir: mode === 'content',
       target: 'es2022',
       sourcemap: true,
       rollupOptions: {
-        input: {
-          [isBackground ? 'background' : 'content']: resolve(
-            root,
-            isBackground ? 'src/background/index.ts' : 'src/content/index.ts',
-          ),
-        },
+        input: { [entry.name]: resolve(root, entry.source) },
         output: {
           entryFileNames: '[name].js',
           assetFileNames: 'assets/[name][extname]',
@@ -79,6 +87,7 @@ export default function config({ mode }: { mode: string }): UserConfig {
         },
       },
     },
-    plugins: isBackground ? [copyManifest(), assertClassicScript()] : [],
+    // Проверки идут последним прогоном: к этому моменту все файлы уже собраны.
+    plugins: isLastPass ? [copyManifest(), assertClassicScripts()] : [],
   };
 }

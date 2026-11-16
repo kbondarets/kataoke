@@ -121,11 +121,9 @@ function start(): void {
     const next = adapter?.getTrack() ?? null;
     if (!next) {
       if (track !== null || !warnedNoTrack) {
-        const media = document.querySelector('audio, video') as HTMLMediaElement | null;
         console.info('[kataoke] трек не распознан', {
-          mediaSession: navigator.mediaSession?.metadata?.title ?? null,
           title: document.title,
-          длительность: media ? media.duration : 'медиа нет',
+          медиаЭлементовВDom: document.querySelectorAll('audio, video').length,
         });
         warnedNoTrack = true;
       }

@@ -51,6 +51,12 @@ description: Устройство расширения Manifest V3 — content s
 - Нужны точные имена: от `window` страницы — `window.wrappedJSObject` только в
   Firefox при необходимости; в Chrome — нет.
 - Не пытаться читать защищённые DRM-данные. Доступа к PCM нет.
+- **Если плеер держит `<audio>` вне DOM, из изолированного мира его не видно.**
+  `new Audio()` без вставки в документ не находится через `querySelectorAll`, а
+  `mediaSession` из изолированного мира не читается. Нужен скрипт в
+  `content_scripts` с `"world": "MAIN"` и `run_at: "document_start"`, который
+  перехватывает `HTMLMediaElement.prototype.play` и общается с content script
+  через `window.postMessage`. Проверено на Яндекс Музыке.
 - **Content script — классический скрипт, не ES-модуль.** Сборка не должна
   выносить общий код в чанки: файл с `import` не загрузится, и это видно только
   по отсутствию любых логов. Content и background собираются отдельными прогонами.

@@ -4,11 +4,15 @@ import type { Seconds, TrackInfo } from '../../core/types';
 /**
  * Адаптер Яндекс Музыки — основной сервис MVP.
  *
- * Публичного стабильного API у сервиса нет, поэтому метаданные берутся из
- * нескольких источников по приоритету:
- * 1. `navigator.mediaSession.metadata` — стандарт, его заполняют многие плееры;
- * 2. `document.title` — «Трек — Артист» (формат может меняться, поэтому разбор
- *    терпимый).
+ * Современный плеер сервиса держит медиа-элемент **вне DOM** (`new Audio()` без
+ * вставки в документ), поэтому из изолированного мира расширения не видно ни
+ * элемента, ни `mediaSession`. Проверено на живой странице: при играющем треке
+ * `document.querySelectorAll('audio, video')` даёт 0, а метаданные пусты.
+ *
+ * Отсюда схема:
+ * 1. `page-agent.ts` исполняется в MAIN-мире страницы, перехватывает `play()` и
+ *    отправляет снимок через `window.postMessage`;
+ * 2. этот файл (изолированный мир) слушает сообщения и отдаёт данные ядру.
  *
  * Вся работа с разметкой сервиса живёт здесь и только здесь: если Яндекс
  * поменяет вёрстку, чинить нужно один файл.
@@ -43,13 +47,10 @@ export function parseYandexTitle(rawTitle: string): { artist: string; title: str
 
 type Listener = () => void;
 
-/**
- * Как часто проверять, не появился ли медиа-элемент.
- *
- * У Яндекс Музыки `<audio>` создаётся после загрузки SPA-приложения, а при
- * навигации внутри сервиса — пересоздаётся. Слушатели, навешенные на старый
- * элемент, тихо перестают работать, поэтому нужен периодический переподхват.
- */
+/** Префикс сообщений агента страницы. Должен совпадать с `page-agent.ts`. */
+const NAMESPACE = 'kataoke-page';
+
+/** Резервная проверка смены трека, если агент ничего не прислал. */
 const MEDIA_WATCHDOG_MS = 1000;
 
 /**
@@ -64,13 +65,74 @@ export function safeDurationSec(media: HTMLMediaElement): Seconds {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
+/** Состояние плеера, которое присылает агент страницы. */
+export interface PageState {
+  title: string;
+  artist: string;
+  album: string;
+  durationSec: number;
+  positionSec: number;
+  paused: boolean;
+  playbackRate: number;
+  hasMedia: boolean;
+}
+
+/** События агента, которые нас интересуют как события адаптера. */
+const PAGE_EVENTS = new Set<PlayerEvent>([
+  'play',
+  'pause',
+  'seek',
+  'ratechange',
+  'ended',
+  'trackchange',
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readString(source: Record<string, unknown>, key: string): string {
+  const value = source[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function readNumber(source: Record<string, unknown>, key: string): number {
+  const value = source[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/** Проверяет и достаёт состояние из `MessageEvent.data` (оно всегда `unknown`). */
+export function parsePageState(data: unknown): PageState | null {
+  if (!isRecord(data) || data['kind'] !== 'state') return null;
+  const state = data['state'];
+  if (!isRecord(state)) return null;
+
+  return {
+    title: readString(state, 'title'),
+    artist: readString(state, 'artist'),
+    album: readString(state, 'album'),
+    durationSec: readNumber(state, 'durationSec'),
+    positionSec: readNumber(state, 'positionSec'),
+    paused: state['paused'] !== false,
+    playbackRate: readNumber(state, 'playbackRate') || 1,
+    hasMedia: state['hasMedia'] === true,
+  };
+}
+
+/** Проверяет, что сообщение — событие плеера, и возвращает его имя. */
+export function parsePageEvent(data: unknown): PlayerEvent | null {
+  if (!isRecord(data) || data['kind'] !== 'event') return null;
+  const name = data['name'];
+  if (typeof name !== 'string') return null;
+  return PAGE_EVENTS.has(name as PlayerEvent) ? (name as PlayerEvent) : null;
+}
+
 export class YandexMusicAdapter implements PlayerAdapter {
   readonly id = 'yandex-music';
 
   readonly #listeners = new Map<PlayerEvent, Set<Listener>>();
   readonly #detach: Array<() => void> = [];
-  readonly #mediaDetach: Array<() => void> = [];
-  #boundMedia: HTMLMediaElement | null = null;
+  #state: PageState | null = null;
   #lastTrackKey = '';
   #started = false;
 
@@ -79,36 +141,44 @@ export class YandexMusicAdapter implements PlayerAdapter {
   }
 
   getTrack(): TrackInfo | null {
-    const media = this.#media();
-    if (!media) return null;
+    const state = this.#state;
+    if (!state) return null;
 
-    const fromMediaSession = this.#trackFromMediaSession(media);
-    if (fromMediaSession) return fromMediaSession;
+    // Метаданные важнее позиции: трек можно опознать и до того, как элемент
+    // перехвачен. Тогда текст уже покажется, а подсветка догонит при `play()`.
+    if (state.title.trim() !== '') {
+      return {
+        title: state.title,
+        artist: state.artist.trim() !== '' ? state.artist : 'Яндекс Музыка',
+        ...(state.album.trim() !== '' ? { album: state.album } : {}),
+        durationSec: state.durationSec,
+      };
+    }
 
+    if (!state.hasMedia) return null;
+
+    // Запасной путь: заголовок вкладки. На новом интерфейсе он обычно равен
+    // «Яндекс Музыка — собираем музыку для вас», то есть трека в нём нет.
     const fromTitle = parseYandexTitle(document.title);
     if (!fromTitle) return null;
 
     return {
       title: fromTitle.title,
       artist: fromTitle.artist,
-      durationSec: safeDurationSec(media),
+      durationSec: state.durationSec,
     };
   }
 
   getPositionSec(): Seconds | null {
-    const media = this.#media();
-    if (!media) return null;
-    return media.currentTime;
+    return this.#state?.hasMedia ? this.#state.positionSec : null;
   }
 
   isPlaying(): boolean {
-    const media = this.#media();
-    return media ? !media.paused : false;
+    return this.#state?.hasMedia ? !this.#state.paused : false;
   }
 
   getPlaybackRate(): number {
-    const media = this.#media();
-    return media?.playbackRate ?? 1;
+    return this.#state?.playbackRate ?? 1;
   }
 
   on(event: PlayerEvent, callback: () => void): Unsubscribe {
@@ -124,105 +194,93 @@ export class YandexMusicAdapter implements PlayerAdapter {
   }
 
   destroy(): void {
-    this.#unbindMedia();
     for (const detach of this.#detach.splice(0)) detach();
     this.#listeners.clear();
     this.#started = false;
   }
 
   /**
-   * Яндекс Музыка — SPA: трек меняется без перезагрузки. Поэтому слушаем не
-   * только медиа-элемент, но и изменения заголовка вкладки и навигацию.
+   * Подписка на сообщения агента страницы.
+   *
+   * Слушаем `message` из изолированного мира: агент живёт в MAIN-мире, и другого
+   * канала связи между этими мирами нет.
    */
   #start(): void {
     if (this.#started) return;
     this.#started = true;
 
-    this.#bindMedia();
+    /** Сколько снимков пришло от агента: 0 означает, что агент не работает. */
+    let received = 0;
 
-    // Смена трека без событий медиа-элемента ловится по заголовку вкладки.
-    const titleElement = document.querySelector('title');
-    if (titleElement) {
-      const observer = new MutationObserver(() => this.#checkTrackChanged());
-      observer.observe(titleElement, { childList: true, characterData: true, subtree: true });
-      this.#detach.push(() => observer.disconnect());
-    }
+    const onMessage = (event: MessageEvent<unknown>): void => {
+      // Сообщения из других окон и фреймов игнорируем.
+      if (event.source !== window) return;
+      const data = event.data;
+      if (!isRecord(data) || data['source'] !== NAMESPACE) return;
 
-    const onNavigate = (): void => this.#checkTrackChanged();
-    window.addEventListener('popstate', onNavigate);
-    this.#detach.push(() => window.removeEventListener('popstate', onNavigate));
+      const state = parsePageState(data);
+      if (state) {
+        this.#state = state;
+        received += 1;
+        if (received === 1) {
+          console.info('[kataoke] агент страницы на связи', state);
+        }
+        this.#checkTrackChanged();
+        return;
+      }
 
-    // Content script может стартовать раньше плеера: `<audio>` у Яндекса
-    // появляется/пересоздаётся при навигации внутри SPA. Watchdog довязывает
-    // события на новый элемент и заодно ловит смену трека.
+      const name = parsePageEvent(data);
+      if (name) this.#emit(name);
+    };
+
+    window.addEventListener('message', onMessage);
+    this.#detach.push(() => window.removeEventListener('message', onMessage));
+
+    // Страховка на случай, если агент не прислал ни одного снимка (например,
+    // инъекция в MAIN-мир запрещена политикой страницы).
     const watchdog = window.setInterval(() => {
-      this.#bindMedia();
+      this.#refreshFromDom();
       this.#checkTrackChanged();
     }, MEDIA_WATCHDOG_MS);
     this.#detach.push(() => window.clearInterval(watchdog));
 
+    this.#refreshFromDom();
     this.#checkTrackChanged();
   }
 
-  /** Подписывается на события текущего медиа-элемента ровно один раз. */
-  #bindMedia(): void {
-    const media = this.#media();
-    if (!media || media === this.#boundMedia) return;
+  /**
+   * Резервный путь: медиа-элемент, отрисованный в DOM.
+   *
+   * Если агент работает, это ничего не меняет — его снимок точнее. Если агента
+   * нет, у нас хотя бы есть позиция и длительность, а метаданные возьмутся из
+   * заголовка вкладки.
+   */
+  #refreshFromDom(): void {
+    if (this.#state?.hasMedia) return;
 
-    this.#unbindMedia();
-    this.#boundMedia = media;
+    const media = document.querySelector('audio, video');
+    if (!(media instanceof HTMLMediaElement)) return;
 
-    const bind = (name: string, event: PlayerEvent): void => {
-      const handler = (): void => this.#emit(event);
-      media.addEventListener(name, handler);
-      this.#mediaDetach.push(() => media.removeEventListener(name, handler));
+    this.#state = {
+      title: '',
+      artist: '',
+      album: '',
+      durationSec: safeDurationSec(media),
+      positionSec: media.currentTime,
+      paused: media.paused,
+      playbackRate: media.playbackRate,
+      hasMedia: true,
     };
-
-    bind('play', 'play');
-    bind('pause', 'pause');
-    bind('seeked', 'seek');
-    bind('ratechange', 'ratechange');
-    bind('ended', 'ended');
-    bind('loadedmetadata', 'trackchange');
-    bind('durationchange', 'trackchange');
-  }
-
-  #unbindMedia(): void {
-    for (const detach of this.#mediaDetach.splice(0)) detach();
-    this.#boundMedia = null;
   }
 
   #checkTrackChanged(): void {
     const track = this.getTrack();
     // Длительность в ключ не входит: пока метаданные не загрузились она равна 0,
-    // и трек отличался бы сам от себя после `loadedmetadata`.
+    // и трек отличался бы сам от себя после появления длительности.
     const key = track ? `${track.artist}|${track.title}` : '';
     if (key === this.#lastTrackKey) return;
     this.#lastTrackKey = key;
     this.#emit('trackchange');
-  }
-
-  /** Метаданные из MediaSession — самый надёжный источник, если он заполнен. */
-  #trackFromMediaSession(media: HTMLMediaElement): TrackInfo | null {
-    const metadata = navigator.mediaSession?.metadata;
-    if (!metadata || !metadata.title) return null;
-
-    return {
-      title: metadata.title,
-      artist: metadata.artist || 'Яндекс Музыка',
-      ...(metadata.album ? { album: metadata.album } : {}),
-      durationSec: safeDurationSec(media),
-    };
-  }
-
-  /** Медиа-элемент плеера: если их несколько, берём играющий. */
-  #media(): HTMLMediaElement | null {
-    const elements = Array.from(document.querySelectorAll('audio, video')).filter(
-      (element): element is HTMLMediaElement => element instanceof HTMLMediaElement,
-    );
-    if (elements.length <= 1) return elements[0] ?? null;
-
-    return elements.find((element) => !element.paused) ?? elements[0] ?? null;
   }
 
   #emit(event: PlayerEvent): void {

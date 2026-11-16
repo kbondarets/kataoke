@@ -13,6 +13,18 @@
         "https://music.yandex.com/*",
         "https://music.yandex.kz/*",
         "https://music.yandex.by/*",
+        "https://music.yandex.uz/*"
+      ],
+      "js": ["page-agent.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://music.yandex.ru/*",
+        "https://music.yandex.com/*",
+        "https://music.yandex.kz/*",
+        "https://music.yandex.by/*",
         "https://music.yandex.uz/*",
         "https://www.youtube.com/*"
       ],
