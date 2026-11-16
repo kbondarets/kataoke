@@ -43,11 +43,34 @@ export function parseYandexTitle(rawTitle: string): { artist: string; title: str
 
 type Listener = () => void;
 
+/**
+ * Как часто проверять, не появился ли медиа-элемент.
+ *
+ * У Яндекс Музыки `<audio>` создаётся после загрузки SPA-приложения, а при
+ * навигации внутри сервиса — пересоздаётся. Слушатели, навешенные на старый
+ * элемент, тихо перестают работать, поэтому нужен периодический переподхват.
+ */
+const MEDIA_WATCHDOG_MS = 1000;
+
+/**
+ * Длительность медиа-элемента в секундах, где «неизвестно» = 0.
+ *
+ * У MSE-плееров `duration` бывает `Infinity` (поток ещё не досчитан) или `NaN`
+ * (метаданных ещё нет). Возвращать такие значения нельзя: они попадут в ключ
+ * кеша и в запрос к провайдеру.
+ */
+export function safeDurationSec(media: HTMLMediaElement): Seconds {
+  const value = media.duration;
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
 export class YandexMusicAdapter implements PlayerAdapter {
   readonly id = 'yandex-music';
 
   readonly #listeners = new Map<PlayerEvent, Set<Listener>>();
   readonly #detach: Array<() => void> = [];
+  readonly #mediaDetach: Array<() => void> = [];
+  #boundMedia: HTMLMediaElement | null = null;
   #lastTrackKey = '';
   #started = false;
 
@@ -57,7 +80,7 @@ export class YandexMusicAdapter implements PlayerAdapter {
 
   getTrack(): TrackInfo | null {
     const media = this.#media();
-    if (!media || !Number.isFinite(media.duration) || media.duration <= 0) return null;
+    if (!media) return null;
 
     const fromMediaSession = this.#trackFromMediaSession(media);
     if (fromMediaSession) return fromMediaSession;
@@ -68,7 +91,7 @@ export class YandexMusicAdapter implements PlayerAdapter {
     return {
       title: fromTitle.title,
       artist: fromTitle.artist,
-      durationSec: media.duration,
+      durationSec: safeDurationSec(media),
     };
   }
 
@@ -101,6 +124,7 @@ export class YandexMusicAdapter implements PlayerAdapter {
   }
 
   destroy(): void {
+    this.#unbindMedia();
     for (const detach of this.#detach.splice(0)) detach();
     this.#listeners.clear();
     this.#started = false;
@@ -114,21 +138,7 @@ export class YandexMusicAdapter implements PlayerAdapter {
     if (this.#started) return;
     this.#started = true;
 
-    const media = this.#media();
-    if (media) {
-      const bind = (name: string, event: PlayerEvent): void => {
-        const handler = (): void => this.#emit(event);
-        media.addEventListener(name, handler);
-        this.#detach.push(() => media.removeEventListener(name, handler));
-      };
-
-      bind('play', 'play');
-      bind('pause', 'pause');
-      bind('seeked', 'seek');
-      bind('ratechange', 'ratechange');
-      bind('ended', 'ended');
-      bind('durationchange', 'trackchange');
-    }
+    this.#bindMedia();
 
     // Смена трека без событий медиа-элемента ловится по заголовку вкладки.
     const titleElement = document.querySelector('title');
@@ -142,12 +152,51 @@ export class YandexMusicAdapter implements PlayerAdapter {
     window.addEventListener('popstate', onNavigate);
     this.#detach.push(() => window.removeEventListener('popstate', onNavigate));
 
+    // Content script может стартовать раньше плеера: `<audio>` у Яндекса
+    // появляется/пересоздаётся при навигации внутри SPA. Watchdog довязывает
+    // события на новый элемент и заодно ловит смену трека.
+    const watchdog = window.setInterval(() => {
+      this.#bindMedia();
+      this.#checkTrackChanged();
+    }, MEDIA_WATCHDOG_MS);
+    this.#detach.push(() => window.clearInterval(watchdog));
+
     this.#checkTrackChanged();
+  }
+
+  /** Подписывается на события текущего медиа-элемента ровно один раз. */
+  #bindMedia(): void {
+    const media = this.#media();
+    if (!media || media === this.#boundMedia) return;
+
+    this.#unbindMedia();
+    this.#boundMedia = media;
+
+    const bind = (name: string, event: PlayerEvent): void => {
+      const handler = (): void => this.#emit(event);
+      media.addEventListener(name, handler);
+      this.#detach.push(() => media.removeEventListener(name, handler));
+    };
+
+    bind('play', 'play');
+    bind('pause', 'pause');
+    bind('seeked', 'seek');
+    bind('ratechange', 'ratechange');
+    bind('ended', 'ended');
+    bind('loadedmetadata', 'trackchange');
+    bind('durationchange', 'trackchange');
+  }
+
+  #unbindMedia(): void {
+    for (const detach of this.#mediaDetach.splice(0)) detach();
+    this.#boundMedia = null;
   }
 
   #checkTrackChanged(): void {
     const track = this.getTrack();
-    const key = track ? `${track.artist}|${track.title}|${Math.round(track.durationSec)}` : '';
+    // Длительность в ключ не входит: пока метаданные не загрузились она равна 0,
+    // и трек отличался бы сам от себя после `loadedmetadata`.
+    const key = track ? `${track.artist}|${track.title}` : '';
     if (key === this.#lastTrackKey) return;
     this.#lastTrackKey = key;
     this.#emit('trackchange');
@@ -162,7 +211,7 @@ export class YandexMusicAdapter implements PlayerAdapter {
       title: metadata.title,
       artist: metadata.artist || 'Яндекс Музыка',
       ...(metadata.album ? { album: metadata.album } : {}),
-      durationSec: media.duration,
+      durationSec: safeDurationSec(media),
     };
   }
 

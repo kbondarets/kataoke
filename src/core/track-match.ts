@@ -64,10 +64,19 @@ export function durationMatches(
   return Math.abs(a - b) <= toleranceSec;
 }
 
-/** Ключ кеша: одинаковый для одного и того же трека в любом сервисе. */
+/**
+ * Ключ кеша: одинаковый для одного и того же трека в любом сервисе.
+ *
+ * Длительность округляется до 5 секунд: у разных сервисов и ремастеров она
+ * расходится на секунды, а без этого один трек кешировался бы многократно.
+ * Неизвестная длительность (`0`) в ключ не попадает — иначе запись, сделанная
+ * до загрузки метаданных, не нашлась бы после.
+ */
 export function buildTrackKey(track: TrackInfo): string {
   const artist = normalizeArtist(track.artist);
   const title = normalizeTitle(track.title);
-  const duration = Math.round(track.durationSec);
-  return `${artist}|${title}|${duration}`;
+  if (track.durationSec <= 0) return `${artist}|${title}`;
+
+  const bucket = Math.round(track.durationSec / 5) * 5;
+  return `${artist}|${title}|${bucket}`;
 }

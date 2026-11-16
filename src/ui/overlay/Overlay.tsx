@@ -22,12 +22,18 @@ const CONTEXT_LINES = 2;
  * маленьким, иначе страница начинает тормозить.
  */
 export function Overlay({ status, timeline, active, errorMessage }: OverlayProps) {
-  if (status === 'idle') return null;
-
   if (status === 'loading') {
     return (
       <div class="kataoke-root">
         <div class="kataoke-note">Ищу текст…</div>
+      </div>
+    );
+  }
+
+  if (status === 'idle') {
+    return (
+      <div class="kataoke-root">
+        <div class="kataoke-note">Включите трек — покажу текст.</div>
       </div>
     );
   }

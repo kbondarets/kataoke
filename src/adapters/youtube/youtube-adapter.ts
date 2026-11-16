@@ -46,7 +46,7 @@ export class YouTubeAdapter implements PlayerAdapter {
 
   getTrack(): TrackInfo | null {
     const media = this.#media();
-    if (!media || !Number.isFinite(media.duration) || media.duration <= 0) return null;
+    if (!media) return null;
 
     const { artist, title } = parseYouTubeTitle(document.title);
     if (title === '') return null;
@@ -55,7 +55,7 @@ export class YouTubeAdapter implements PlayerAdapter {
     return {
       title,
       artist: artist || 'YouTube',
-      durationSec: media.duration,
+      durationSec: Number.isFinite(media.duration) && media.duration > 0 ? media.duration : 0,
       ...(videoId ? { sourceId: videoId } : {}),
     };
   }

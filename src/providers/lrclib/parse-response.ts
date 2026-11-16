@@ -9,6 +9,8 @@ import type { LyricsTimeline, TrackInfo } from '../../core/types';
 
 /** Полезные поля ответа LRCLIB, которые нам действительно нужны. */
 export interface LrclibRecord {
+  trackName: string | null;
+  artistName: string | null;
   syncedLyrics: string | null;
   plainLyrics: string | null;
   instrumental: boolean;
@@ -37,6 +39,8 @@ export function parseLrclibRecord(raw: unknown): LrclibRecord | null {
   if (!isRecord(raw)) return null;
 
   return {
+    trackName: readStringOrNull(raw, 'trackName'),
+    artistName: readStringOrNull(raw, 'artistName'),
     syncedLyrics: readStringOrNull(raw, 'syncedLyrics'),
     plainLyrics: readStringOrNull(raw, 'plainLyrics'),
     instrumental: raw['instrumental'] === true,
@@ -78,7 +82,19 @@ export function buildGetParams(track: TrackInfo): URLSearchParams {
   const params = new URLSearchParams({
     artist_name: track.artist,
     track_name: track.title,
-    duration: String(Math.round(track.durationSec)),
+  });
+  // Без длительности точный запрос LRCLIB почти всегда отвечает 404,
+  // поэтому при неизвестной длительности используем поиск.
+  if (track.durationSec > 0) params.set('duration', String(Math.round(track.durationSec)));
+  if (track.album) params.set('album_name', track.album);
+  return params;
+}
+
+/** Параметры поиска — запасной путь, когда точный запрос не сработал. */
+export function buildSearchParams(track: TrackInfo): URLSearchParams {
+  const params = new URLSearchParams({
+    artist_name: track.artist,
+    track_name: track.title,
   });
   if (track.album) params.set('album_name', track.album);
   return params;

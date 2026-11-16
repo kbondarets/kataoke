@@ -70,6 +70,13 @@ describe('buildTrackKey', () => {
     const b = buildTrackKey({ title: 'Song', artist: 'Art', durationSec: 260 });
     expect(a).not.toBe(b);
   });
+
+  it('неизвестная длительность не мешает найти тот же трек', () => {
+    const unknown = buildTrackKey({ title: 'Song', artist: 'Art', durationSec: 0 });
+    const known = buildTrackKey({ title: 'Song', artist: 'Art', durationSec: 200 });
+    expect(unknown).toBe('art|song');
+    expect(known.startsWith('art|song|')).toBe(true);
+  });
 });
 
 describe('parseYandexTitle', () => {

@@ -46,6 +46,13 @@ export interface TrackInfo {
   title: string;
   artist: string;
   album?: string;
+  /**
+   * Длительность в секундах.
+   *
+   * `0` означает «неизвестна»: у MSE-плееров (Яндекс Музыка, Spotify) поле
+   * `media.duration` бывает `Infinity`, пока поток не досчитан. В этом случае
+   * провайдер ищет текст поиском, а не точным запросом.
+   */
   durationSec: Seconds;
   /** Идентификатор трека на стороне сервиса, если есть. */
   sourceId?: string;

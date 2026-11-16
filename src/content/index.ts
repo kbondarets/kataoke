@@ -25,6 +25,13 @@ const LEAD_MS = DEFAULT_LEAD_MS;
 function start(): void {
   const adapters = createAdapters();
   const adapter = pickAdapter(adapters, location.href);
+
+  console.info('[kataoke] старт', {
+    url: location.href,
+    адаптер: adapter?.id ?? 'не найден',
+    медиаЭлементов: document.querySelectorAll('audio, video').length,
+  });
+
   if (!adapter) return;
 
   // В MVP кеш живёт в памяти вкладки: `chrome.storage` подключим отдельной
@@ -43,6 +50,8 @@ function start(): void {
   let active: ActiveState = { lineIndex: -1, wordIndex: -1, wordProgress: 0 };
   let lookupAbort: AbortController | null = null;
   let frameHandle = 0;
+  /** Диагностика «трек не распознан» печатается один раз, чтобы не спамить. */
+  let warnedNoTrack = false;
 
   const nowMs = (): number => performance.now();
 
@@ -111,6 +120,15 @@ function start(): void {
   function handleTrackChange(): void {
     const next = adapter?.getTrack() ?? null;
     if (!next) {
+      if (track !== null || !warnedNoTrack) {
+        const media = document.querySelector('audio, video') as HTMLMediaElement | null;
+        console.info('[kataoke] трек не распознан', {
+          mediaSession: navigator.mediaSession?.metadata?.title ?? null,
+          title: document.title,
+          длительность: media ? media.duration : 'медиа нет',
+        });
+        warnedNoTrack = true;
+      }
       track = null;
       timeline = null;
       setStatus('idle');
@@ -119,6 +137,8 @@ function start(): void {
 
     if (track && next.title === track.title && next.artist === track.artist) return;
 
+    console.info('[kataoke] трек', next);
+    warnedNoTrack = false;
     track = next;
     resetSample();
     void loadLyrics(next);
